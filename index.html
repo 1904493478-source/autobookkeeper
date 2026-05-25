@@ -466,6 +466,8 @@ function Calendar(monthDate){
 }
 
 function dayCellClick(iso){renderTransactions();switchTab(1)}
+
+function renderTransactions(){
   const list=document.getElementById('txnList');
   const empty=document.getElementById('emptyTxn');
   let filtered=transactions;
