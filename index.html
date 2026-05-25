@@ -311,15 +311,14 @@ async function handleURL(){
   const decoded=decodeURIComponent(ocr);
   const amount=extractAmount(decoded);
   if(!amount){showToast('无法识别金额，请手动记账');return}
-  // 支出信号：支付成功/付款成功/消费/已付款/扣款
-  // 收入信号：收款成功/收到一笔转账/已入账/扫二维码收款
   let type='expense';
   if(/收款成功|扫.*码.*收款|收到一笔转账|已入账/.test(decoded)) type='income';
   if(/支付成功|付款成功|消费|已付款|扣款成功/.test(decoded)) type='expense';
   const merchant=extractMerchant(decoded);
   const method=decoded.includes('微信')?'wechat':decoded.includes('支付宝')?'alipay':'other';
+  const txnDate=extractDate(decoded);
   const store=txStore('readwrite');
-  const txn={id:crypto.randomUUID(),amount,type,merchant,note:'',method,date:new Date().toISOString(),createdAt:new Date().toISOString()};
+  const txn={id:crypto.randomUUID(),amount,type,merchant,note:'',method,date:txnDate.toISOString(),createdAt:new Date().toISOString()};
   store.add(txn);
   await new Promise(r=>{store.transaction.oncomplete=r});
   await loadData();
@@ -327,7 +326,6 @@ async function handleURL(){
   showToast(`已记账 · ${label} ¥${amount.toFixed(2)}`);
   showLocalNotification(label,amount);
   renderAll();
-  // 自动弹出编辑框让用户确认分类
   setTimeout(()=>openEditModal(txn.id),500);
 }
 function extractAmount(text){
@@ -335,10 +333,36 @@ function extractAmount(text){
   for(const p of patterns){const m=text.match(p);if(m&&parseFloat(m[1])>0)return parseFloat(m[1])}
   return 0;
 }
+function extractDate(text){
+  const now=new Date();
+  // Try "2025年5月25日" or "2025年05月25日"
+  const m1=text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if(m1)return new Date(+m1[1],+m1[2]-1,+m1[3]);
+  // Try "5月25日"
+  const m2=text.match(/(\d{1,2})月(\d{1,2})日/);
+  if(m2)return new Date(now.getFullYear(),+m2[1]-1,+m2[2]);
+  // Try "2025-05-25"
+  const m3=text.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m3)return new Date(+m3[1],+m3[2]-1,+m3[3]);
+  // Try "05-25"
+  const m4=text.match(/^(\d{1,2})-(\d{1,2})\b/m);
+  if(m4)return new Date(now.getFullYear(),+m4[1]-1,+m4[2]);
+  // Try "5月25日 14:30" variant (already covered above)
+  return now;
+}
 function extractMerchant(text){
-  const lines=text.split('\n').map(l=>l.trim()).filter(l=>l&&l.length>=2&&l.length<=20);
-  const skip=['支付','收','¥','￥','元','微信','支付宝','成功','付款','收款','当前','状态','零钱','扫一扫'];
-  for(const l of lines.slice(0,5)){if(!skip.some(w=>l.includes(w)))return l}
+  const lines=text.split('\n').map(l=>l.trim()).filter(l=>l);
+  // Filters to skip non-merchant lines
+  const hasTime=/\d{1,2}:\d{2}/;
+  const isAmount=/^[¥￥]\s*\d|^\d+\.\d{2}$/;
+  const skipWords=['支付','收','¥','￥','元','微信','支付宝','成功','付款','收款','当前','状态','零钱','扫一扫','订单','交易','账单','详情','返回','完成','确认','取消'];
+  for(const l of lines.slice(0,8)){
+    if(l.length<2||l.length>25)continue;
+    if(hasTime.test(l))continue;
+    if(isAmount.test(l))continue;
+    if(skipWords.some(w=>l.includes(w)))continue;
+    return l;
+  }
   return lines[0]||'';
 }
 function showLocalNotification(type,amount){
@@ -415,11 +439,11 @@ function renderHeatmap(monthTxns){
     if(!d)return'zero';
     const net=d.income-d.expense;
     if(net>0){
-      const ratio=Math.min(d.income/maxAmount,1);
-      if(ratio<0.2)return'i1';if(ratio<0.4)return'i2';if(ratio<0.6)return'i3';if(ratio<0.8)return'i4';return'i5';
+      const v=d.income;
+      if(v<100)return'i1';if(v<200)return'i2';if(v<500)return'i3';if(v<1000)return'i4';return'i5';
     }else{
-      const ratio=Math.min(d.expense/maxAmount,1);
-      if(ratio<0.2)return'g1';if(ratio<0.4)return'g2';if(ratio<0.6)return'g3';if(ratio<0.8)return'g4';return'g5';
+      const v=d.expense;
+      if(v<100)return'g1';if(v<200)return'g2';if(v<500)return'g3';if(v<1000)return'g4';return'g5';
     }
   }
 
