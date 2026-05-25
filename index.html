@@ -85,6 +85,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .icon-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
 .icon-grid button{width:100%;aspect-ratio:1;border:2px solid transparent;border-radius:12px;background:var(--bg);font-size:24px;cursor:pointer;display:flex;align-items:center;justify-content:center}
 .icon-grid button.selected{border-color:var(--primary);background:var(--primary-light)}
+.heatmap-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.heatmap-label{font-size:11px;color:var(--text2);text-align:center;padding:2px 0}
+.heatmap-cell{aspect-ratio:1;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;color:var(--text2);cursor:pointer;min-width:0;position:relative}
+.heatmap-cell.empty{background:transparent;color:transparent}
+.heatmap-cell.zero{background:#E8EDF4;color:var(--text2)}
+.heatmap-cell.g1{background:#FEF2F2;color:#7F1D1D}.heatmap-cell.g2{background:#FECACA;color:#7F1D1D}.heatmap-cell.g3{background:#F87171;color:#FFF}.heatmap-cell.g4{background:#EF4444;color:#FFF}.heatmap-cell.g5{background:#B91C1C;color:#FFF}
+.heatmap-cell.i1{background:#F0FDF4;color:#14532D}.heatmap-cell.i2{background:#BBF7D0;color:#14532D}.heatmap-cell.i3{background:#4ADE80;color:#14532D}.heatmap-cell.i4{background:#22C55E;color:#FFF}.heatmap-cell.i5{background:#16A34A;color:#FFF}
+.heatmap-legend{display:flex;align-items:center;gap:8px;margin-top:8px;justify-content:flex-end;font-size:11px;color:var(--text2)}
+.heatmap-legend .dot{width:14px;height:14px;border-radius:4px}
 </style>
 </head>
 <body>
@@ -118,6 +127,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <span style="font-size:14px;font-weight:500;color:var(--text2)">当月结余</span>
       <span class="amount-sm" id="sumBalance" style="color:var(--income)">¥0.00</span>
     </div>
+  </div>
+  <div class="card">
+    <div class="card-title">月度热力图 <span style="font-weight:400;font-size:12px">（点击日期查看详情）</span></div>
+    <div id="heatmapWeekLabels" style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:4px"></div>
+    <div class="heatmap-grid" id="heatmapGrid"></div>
+    <div id="heatmapLegend" class="heatmap-legend"></div>
   </div>
   <div class="card" id="top3Card" style="display:none">
     <div class="card-title">支出 Top 3</div>
@@ -376,8 +391,81 @@ function renderSummary(){
     document.getElementById('top3List').innerHTML=top3.map((d,i)=>`<div style="display:flex;align-items:center;gap:12px;padding:8px 0"><span style="font-size:14px;font-weight:700;color:var(--text2);width:20px">${i+1}</span><span style="font-size:20px;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${colors[i]}20">${d.icon}</span><span style="font-size:16px;flex:1">${d.name}</span><span style="font-size:16px;color:var(--expense)">¥${d.amount.toFixed(2)}</span></div>`).join('');
   }else{tc.style.display='none'}
   document.getElementById('emptySummary').style.display=monthTxns.length===0?'':'none';
+  renderHeatmap(monthTxns);
 }
-function renderTransactions(){
+
+function renderHeatmap(monthTxns){
+  const weekLabels=['一','二','三','四','五','六','日'];
+  document.getElementById('heatmapWeekLabels').innerHTML=weekLabels.map(d=>`<div class="heatmap-label">${d}</div>`).join('');
+
+  const cal=new Calendar(displayedMonth);
+  const maxAmount=Math.max(1,...monthTxns.map(t=>t.amount));
+
+  const daily={};
+  for(const t of monthTxns){
+    const d=new Date(t.date).toDateString();
+    daily[d]=daily[d]||{income:0,expense:0};
+    if(t.type==='income')daily[d].income+=t.amount;
+    else daily[d].expense+=t.amount;
+  }
+
+  function getClass(day){
+    const ds=day.toDateString();
+    const d=daily[ds];
+    if(!d)return'zero';
+    const net=d.income-d.expense;
+    if(net>0){
+      const ratio=Math.min(d.income/maxAmount,1);
+      if(ratio<0.2)return'i1';if(ratio<0.4)return'i2';if(ratio<0.6)return'i3';if(ratio<0.8)return'i4';return'i5';
+    }else{
+      const ratio=Math.min(d.expense/maxAmount,1);
+      if(ratio<0.2)return'g1';if(ratio<0.4)return'g2';if(ratio<0.6)return'g3';if(ratio<0.8)return'g4';return'g5';
+    }
+  }
+
+  function getTooltip(day){
+    const ds=day.toDateString();
+    const d=daily[ds];
+    if(!d) return `${day.getMonth()+1}/${day.getDate()} 无记录`;
+    const parts=[];
+    if(d.income>0)parts.push(`收 ¥${d.income.toFixed(2)}`);
+    if(d.expense>0)parts.push(`支 ¥${d.expense.toFixed(2)}`);
+    return `${day.getMonth()+1}/${day.getDate()} ${parts.join(' ')}`;
+  }
+
+  let html='';
+  for(const day of cal.days){
+    if(day===null){
+      html+='<div class="heatmap-cell empty"></div>';
+    }else{
+      const cls=getClass(day);
+      html+=`<div class="heatmap-cell ${cls}" onclick="dayCellClick('${day.toISOString()}')" title="${getTooltip(day)}">${day.getDate()}</div>`;
+    }
+  }
+  document.getElementById('heatmapGrid').innerHTML=html;
+
+  // Legend
+  document.getElementById('heatmapLegend').innerHTML=`
+    <span>支</span>
+    <span class="dot g1"></span><span class="dot g3"></span><span class="dot g5"></span>
+    <span style="margin-left:8px">收</span>
+    <span class="dot i1"></span><span class="dot i3"></span><span class="dot i5"></span>
+  `;
+}
+
+function Calendar(monthDate){
+  const y=monthDate.getFullYear(),m=monthDate.getMonth();
+  const firstDay=new Date(y,m,1);
+  const lastDay=new Date(y,m+1,0);
+  // day of week: 0=Sun, shift to Mon=0
+  let startDow=firstDay.getDay()-1;
+  if(startDow<0)startDow=6;
+  this.days=[];
+  for(let i=0;i<startDow;i++)this.days.push(null);
+  for(let d=1;d<=lastDay.getDate();d++)this.days.push(new Date(y,m,d));
+}
+
+function dayCellClick(iso){renderTransactions();switchTab(1)}
   const list=document.getElementById('txnList');
   const empty=document.getElementById('emptyTxn');
   let filtered=transactions;
