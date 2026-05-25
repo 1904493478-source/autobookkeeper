@@ -199,6 +199,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   </div>
 </div>
 
+<!-- Edit Transaction Modal -->
+<div class="modal-overlay" id="editModal" style="display:none" onclick="if(event.target===this)hideModal('editModal')">
+  <div class="modal-sheet">
+    <h3 id="editTitle">编辑交易</h3>
+    <input type="hidden" id="editId">
+    <div class="form-group"><label>类型</label>
+      <div class="segmented">
+        <button class="active" id="editTypeExp" onclick="setEditType('expense')">支出</button>
+        <button id="editTypeInc" onclick="setEditType('income')">收入</button>
+      </div>
+    </div>
+    <div class="form-group"><label>金额 ¥</label><input id="editAmount" type="number" step="0.01" placeholder="0.00"></div>
+    <div class="form-group"><label>商户</label><input id="editMerchant" placeholder="商户名称"></div>
+    <div class="form-group"><label>分类</label><select id="editCategory" style="width:100%;padding:12px;border:1px solid var(--divider);border-radius:10px;font-size:16px;background:var(--bg)"></select></div>
+    <div class="form-group"><label>备注</label><input id="editNote" placeholder="备注（可选）"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveEdit()">保存</button>
+      <button class="btn btn-cancel" onclick="hideModal('editModal')">取消</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // === IndexedDB ===
 const DB_NAME='AutoBookkeeper';
@@ -274,7 +296,11 @@ async function handleURL(){
   const decoded=decodeURIComponent(ocr);
   const amount=extractAmount(decoded);
   if(!amount){showToast('无法识别金额，请手动记账');return}
-  const type=decoded.includes('收款')||decoded.includes('入账')?'income':'expense';
+  // 支出信号：支付成功/付款成功/消费/已付款/扣款
+  // 收入信号：收款成功/收到一笔转账/已入账/扫二维码收款
+  let type='expense';
+  if(/收款成功|扫.*码.*收款|收到一笔转账|已入账/.test(decoded)) type='income';
+  if(/支付成功|付款成功|消费|已付款|扣款成功/.test(decoded)) type='expense';
   const merchant=extractMerchant(decoded);
   const method=decoded.includes('微信')?'wechat':decoded.includes('支付宝')?'alipay':'other';
   const store=txStore('readwrite');
@@ -286,6 +312,8 @@ async function handleURL(){
   showToast(`已记账 · ${label} ¥${amount.toFixed(2)}`);
   showLocalNotification(label,amount);
   renderAll();
+  // 自动弹出编辑框让用户确认分类
+  setTimeout(()=>openEditModal(txn.id),500);
 }
 function extractAmount(text){
   const patterns=[/¥\s*(\d+\.?\d{0,2})/,/￥\s*(\d+\.?\d{0,2})/,/(\d+\.\d{2})/];
@@ -294,7 +322,7 @@ function extractAmount(text){
 }
 function extractMerchant(text){
   const lines=text.split('\n').map(l=>l.trim()).filter(l=>l&&l.length>=2&&l.length<=20);
-  const skip=['支付','收','¥','￥','元','微信','支付宝','成功','付款','收款','当前','状态','零钱'];
+  const skip=['支付','收','¥','￥','元','微信','支付宝','成功','付款','收款','当前','状态','零钱','扫一扫'];
   for(const l of lines.slice(0,5)){if(!skip.some(w=>l.includes(w)))return l}
   return lines[0]||'';
 }
@@ -409,25 +437,53 @@ async function deleteTransaction(id){
   await new Promise(r=>{store.transaction.oncomplete=r});
   await loadData();renderAll();
 }
-function editTransaction(id){
+let editType='expense';
+
+function openEditModal(id){
   const t=transactions.find(x=>x.id===id);
   if(!t)return;
-  // Simple edit via prompt for amount and merchant
-  const newAmt=prompt('金额',t.amount);
-  if(newAmt===null)return;
-  const newMerchant=prompt('商户',t.merchant||'');
-  if(newMerchant===null)return;
-  const amt=parseFloat(newAmt);
-  if(isNaN(amt)||amt<=0)return;
+  document.getElementById('editId').value=id;
+  editType=t.type;
+  setEditType(t.type);
+  document.getElementById('editAmount').value=t.amount;
+  document.getElementById('editMerchant').value=t.merchant||'';
+  document.getElementById('editNote').value=t.note||'';
+  populateCategorySelect(t.type);
+  if(t.categoryId)document.getElementById('editCategory').value=t.categoryId;
+  showModal('editModal');
+}
+
+function setEditType(type){
+  editType=type;
+  document.getElementById('editTypeExp').classList.toggle('active',type==='expense');
+  document.getElementById('editTypeInc').classList.toggle('active',type==='income');
+  populateCategorySelect(type);
+}
+
+function populateCategorySelect(type){
+  const sel=document.getElementById('editCategory');
+  const cats=categories.filter(c=>c.type===type);
+  sel.innerHTML=cats.map(c=>`<option value="${c.id}">${c.icon} ${c.name}</option>`).join('');
+}
+
+async function saveEdit(){
+  const id=document.getElementById('editId').value;
+  const amount=parseFloat(document.getElementById('editAmount').value);
+  const merchant=document.getElementById('editMerchant').value.trim();
+  const note=document.getElementById('editNote').value.trim();
+  const categoryId=document.getElementById('editCategory').value;
+  if(isNaN(amount)||amount<=0){showToast('请输入有效金额');return}
   const store=txStore('readwrite');
   const req=store.get(id);
   req.onsuccess=()=>{
     const r=req.result;
-    r.amount=amt;r.merchant=newMerchant;
+    r.amount=amount;r.type=editType;r.merchant=merchant;r.note=note;r.categoryId=categoryId;
     store.put(r);
-    store.transaction.oncomplete=async()=>{await loadData();renderAll()};
+    store.transaction.oncomplete=async()=>{await loadData();renderAll();hideModal('editModal')};
   };
 }
+
+function editTransaction(id){openEditModal(id)}
 
 // === Month ===
 function changeMonth(delta){
